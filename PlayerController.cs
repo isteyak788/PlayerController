@@ -1,36 +1,51 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class PlayerController : MonoBehaviour
 {
     [Header("Movement Settings")]
-    public float moveSpeed = 5.0f;
+    public float moveSpeed = 15.0f;
     public float runSpeedMultiplier = 2.0f;
-    public float accelerationTime = 1.0f;
-    public float deaccelerationTime = 1.0f;
-    public float jumpForce = 10.0f;
-    public float gravity = 20.0f;
+    public float accelerationTime = 0.0f;
+    public float deaccelerationTime = 0.0f;
+    public float gravity = 30.0f;
     public Transform groundCheck;
     public LayerMask groundLayer;
     public float groundCheckRadius = 0.2f;
     public Transform playerCamera;
     public Transform body;
 
-    [Header("Forward Dash Settings")]
-    public float forwardDashSpeed = 10.0f;
-    public bool canForwardDash = true;
-    public float forwardRotationSmoothness = 10.0f;
-    public float forwardGraceTime = 0.1f;
-    public float forwardDashTime = 0.5f;
-    public float forwardDashCooldown = 2.0f; // Cooldown time for forward dash
+    [Header("Jump Settings")]
+    public float jumpForce = 20.0f;
+    public float doubleJumpForce = 20.0f;
+    public float tripleJumpForce = 25.0f;
 
-    [Header("Backward Dash Settings")]
-    public float backwardDashSpeed = 10.0f;
-    public bool canBackwardDash = true;
-    public float backwardRotationSmoothness = 10.0f;
-    public float backwardGraceTime = 0.1f;
-    public float backwardDashTime = 0.5f;
-    public float backwardDashCooldown = 2.0f; // Cooldown time for backward dash
+    [Header("Jump Options")]
+    public bool canDoubleJump = true;
+    public bool canTripleJump = true;
+
+    [Header("Forward Run Settings")]
+    public float forwardRunSpeed = 40.0f;
+    public bool canForwardRun = true;
+    private bool isForwardRunning;
+
+    [Header("Special Jump Settings")]
+    public float specialJumpForce = 30.0f;
+    public Collider[] specialJumpTriggers;
+
+    [Header("Speed Boost Settings")]
+    public float speedBoostFactor = 2.0f;
+    public Collider[] speedBoostTriggers;
+
+    [Header("Stamina Settings")]
+    public float maxStamina = 100.0f;
+    public float currentStamina;
+    public float staminaDrownTime = 5.0f; // How many seconds it takes to drown the stamina
+    public float staminaDrownPercentage = 50.0f; // How much percentage of stamina will drown
+    public float staminaRestoreAmount = 100.0f; // How much stamina is restored by a collectible
+
+    public Collider[] staminaCollectibleTriggers; // Stamina collectible trigger zones
 
     private Vector3 moveDirection;
     private bool isGrounded;
@@ -38,27 +53,24 @@ public class PlayerController : MonoBehaviour
     private float currentSpeed;
     private float velocityY;
     private bool isRunning;
-    private bool isDashing;
-    private float initialYRotation;
-    private float targetYRotation;
-    private float lastGroundedTime;
-    private float lastJumpButtonTime;
-    private float lastForwardDashTime; // Added variable to track forward dash cooldown
-    private float lastBackwardDashTime; // Added variable to track backward dash cooldown
-
     private CharacterController controller;
     private float initialSpeed;
+    private float lastGroundedTime;
+    private float lastJumpButtonTime;
+    private int remainingJumps;
+    private bool isStaminaDecreasing = true; // New flag to control stamina decrease
+    private bool isSpeedBoostActive; // Indicates if the speed boost is active
 
     private void Awake()
     {
         controller = GetComponent<CharacterController>();
         isRunning = false;
-        isDashing = false;
-        lastGroundedTime = -forwardGraceTime;
-        lastJumpButtonTime = -forwardGraceTime;
+        lastGroundedTime = -0.1f;
+        lastJumpButtonTime = -0.1f;
         initialSpeed = moveSpeed;
-        lastForwardDashTime = -forwardDashCooldown; // Initialize last dash times
-        lastBackwardDashTime = -backwardDashCooldown;
+        remainingJumps = 1;
+        isSpeedBoostActive = false; // Initially, the speed boost is not active
+        currentStamina = maxStamina;
     }
 
     private void Update()
@@ -70,7 +82,7 @@ public class PlayerController : MonoBehaviour
         {
             lastGroundedTime = Time.time;
             isRunning = false;
-            isDashing = false;
+            remainingJumps = canTripleJump ? 3 : (canDoubleJump ? 2 : 1);
 
             if (velocityY < 0)
             {
@@ -87,14 +99,48 @@ public class PlayerController : MonoBehaviour
 
         isRunning = Input.GetKey(KeyCode.LeftShift);
 
+        // Update stamina
+        if (isStaminaDecreasing)
+        {
+            currentStamina -= (Time.deltaTime / staminaDrownTime) * (maxStamina * staminaDrownPercentage / 100);
+            currentStamina = Mathf.Clamp(currentStamina, 0.0f, maxStamina);
+
+            // Check if stamina should stop decreasing
+            if (currentStamina <= maxStamina * staminaDrownPercentage / 100)
+            {
+                isStaminaDecreasing = false;
+            }
+        }
+
+        // Check for stamina collectibles
+        foreach (Collider collectibleTrigger in staminaCollectibleTriggers)
+        {
+            if (collectibleTrigger != null && collectibleTrigger.bounds.Contains(transform.position))
+            {
+                RestoreStamina();
+                break;
+            }
+        }
+
+        // Modify move speed and jump forces based on stamina
+        float staminaMultiplier = currentStamina / maxStamina;
+
+        float effectiveMoveSpeed = moveSpeed * staminaMultiplier;
+        float effectiveRunSpeedMultiplier = runSpeedMultiplier * staminaMultiplier;
+        float effectiveForwardRunSpeed = forwardRunSpeed * staminaMultiplier;
+
+        float effectiveJumpForce = jumpForce * staminaMultiplier;
+        float effectiveDoubleJumpForce = doubleJumpForce * staminaMultiplier;
+        float effectiveTripleJumpForce = tripleJumpForce * staminaMultiplier;
+
         Vector3 cameraRight = playerCamera.right;
         cameraRight.y = 0.0f;
         cameraRight.Normalize();
 
-        float speedMultiplier = isRunning ? runSpeedMultiplier : 1.0f;
+        float speedMultiplier = isRunning ? effectiveRunSpeedMultiplier : 1.0f;
 
         Vector3 move = cameraRight * horizontalInput + playerCamera.forward * verticalInput;
-        moveDirection = Vector3.Lerp(moveDirection, move.normalized * moveSpeed * speedMultiplier, isGrounded ? Time.deltaTime / accelerationTime : Time.deltaTime / deaccelerationTime);
+        moveDirection = Vector3.Lerp(moveDirection, move.normalized * effectiveMoveSpeed * speedMultiplier, isGrounded ? Time.deltaTime / accelerationTime : Time.deltaTime / deaccelerationTime);
 
         if (!isGrounded)
         {
@@ -108,95 +154,87 @@ public class PlayerController : MonoBehaviour
         if (Input.GetButtonDown("Jump"))
         {
             lastJumpButtonTime = Time.time;
-            if (Time.time - lastGroundedTime <= forwardGraceTime)
+            if (Time.time - lastGroundedTime <= 0.1f)
             {
-                Jump();
+                Jump(effectiveJumpForce);
+            }
+            else if (remainingJumps > 0)
+            {
+                if (canDoubleJump && Time.time - lastJumpButtonTime <= 0.1f)
+                {
+                    Jump(effectiveDoubleJumpForce);
+                }
+                else if (canTripleJump && Time.time - lastJumpButtonTime <= 0.1f)
+                {
+                    Jump(effectiveTripleJumpForce);
+                }
             }
         }
 
-        // Forward Dash input and execution
-        if (canForwardDash && Input.GetKeyDown(KeyCode.Q) && !isDashing && Time.time - lastForwardDashTime >= forwardDashCooldown)
+        // Handle forward running
+        if (Input.GetKey(KeyCode.E) && canForwardRun)
         {
-            StartCoroutine(ForwardDash());
+            isForwardRunning = true;
+            isRunning = false;
+        }
+        else if (Input.GetKeyUp(KeyCode.E))
+        {
+            isForwardRunning = false;
+            isRunning = Input.GetKey(KeyCode.LeftShift);
         }
 
-        // Backward Dash input and execution (using the "E" key)
-        if (canBackwardDash && Input.GetKeyDown(KeyCode.E) && !isDashing && Time.time - lastBackwardDashTime >= backwardDashCooldown)
+        // Forward run
+        if (isForwardRunning)
         {
-            StartCoroutine(BackwardDash());
+            Vector3 forwardMove = playerCamera.forward;
+            forwardMove.y = 0.0f;
+            forwardMove.Normalize();
+
+            controller.Move(forwardMove * effectiveForwardRunSpeed * Time.deltaTime);
         }
 
-        if (move.magnitude > 0)
+        // Check if the player is inside any of the trigger zones and trigger the special jump
+        foreach (Collider trigger in specialJumpTriggers)
         {
-            RotateTowardsMovementDirection(move);
+            if (trigger != null && trigger.bounds.Contains(transform.position))
+            {
+                SpecialJump();
+                break; // Exit the loop after the first trigger found
+            }
+        }
+
+        // Check if the player is inside any of the trigger zones and activate the speed boost
+        foreach (Collider trigger in speedBoostTriggers)
+        {
+            if (trigger != null && trigger.bounds.Contains(transform.position))
+            {
+                isSpeedBoostActive = true;
+                break; // Exit the loop after the first trigger found
+            }
+            else
+            {
+                isSpeedBoostActive = false;
+            }
         }
 
         controller.Move((moveDirection + Vector3.up * velocityY) * Time.deltaTime);
     }
 
-    private void Jump()
+    private void Jump(float jumpForce)
     {
-        if (Time.time - lastGroundedTime <= forwardGraceTime)
-        {
-            velocityY = jumpForce;
-            isGrounded = false;
-        }
+        velocityY = jumpForce;
+        isGrounded = false;
+        remainingJumps--;
     }
 
-    private void RotateTowardsMovementDirection(Vector3 direction)
+    private void RestoreStamina()
     {
-        float targetAngle = Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg;
-        float angle = Mathf.SmoothDampAngle(transform.eulerAngles.y, targetAngle, ref currentSpeed, 0.1f);
-        transform.rotation = Quaternion.Euler(0, angle, 0);
+        currentStamina = Mathf.Clamp(currentStamina + staminaRestoreAmount, 0.0f, maxStamina);
     }
 
-    private IEnumerator ForwardDash()
+    private void SpecialJump()
     {
-        isDashing = true;
-        lastForwardDashTime = Time.time; // Record the time of the forward dash
-
-        Vector3 startPosition = transform.position;
-        float startTime = Time.time;
-
-        Vector3 dashDirection = playerCamera.forward;
-        dashDirection.y = 0.0f; // Ignore changes in the Y-axis.
-
-        initialYRotation = transform.rotation.eulerAngles.y;
-        targetYRotation = Quaternion.LookRotation(dashDirection).eulerAngles.y;
-
-        while (Time.time - startTime < forwardDashTime)
-        {
-            float currentYRotation = Mathf.LerpAngle(initialYRotation, targetYRotation, (Time.time - startTime) / forwardDashTime);
-            transform.rotation = Quaternion.Euler(0, currentYRotation, 0);
-            controller.Move(dashDirection.normalized * forwardDashSpeed * Time.deltaTime);
-            yield return null;
-        }
-
-        isDashing = false;
-    }
-
-
-    private IEnumerator BackwardDash()
-    {
-        isDashing = true;
-        lastBackwardDashTime = Time.time; // Record the time of the backward dash
-
-        Vector3 startPosition = transform.position;
-        float startTime = Time.time;
-
-        Vector3 dashDirection = -playerCamera.forward;
-
-        initialYRotation = transform.rotation.eulerAngles.y;
-        targetYRotation = Quaternion.LookRotation(dashDirection).eulerAngles.y;
-
-        while (Time.time - startTime < backwardDashTime)
-        {
-            float currentYRotation = Mathf.LerpAngle(initialYRotation, targetYRotation, (Time.time - startTime) / backwardDashTime);
-            transform.rotation = Quaternion.Euler(0, currentYRotation, 0);
-            controller.Move(dashDirection * backwardDashSpeed * Time.deltaTime);
-            yield return null;
-        }
-
-        isDashing = false;
+        velocityY = specialJumpForce;
+        isGrounded = false;
     }
 }
